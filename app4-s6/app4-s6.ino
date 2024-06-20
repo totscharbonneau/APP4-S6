@@ -8,6 +8,7 @@ const float WITHIN_RANGE = 0.1;
 
 //GLOBAL VARIABLES
 uint8_t rxFrame[262];
+bool rxFrameReadyFlag = false;
 
 
 //TOTS VARIABLES
@@ -33,6 +34,7 @@ enum syncClk syncClkState = NoSync;
 int64_t noSyncPeriodAvgBuf[7];
 int64_t halfPeriod;
 enum lastSymbol {HalfPeriod, Period, Error};
+uint16_t currentBitPos;
 
 
 void readFrame();
@@ -138,12 +140,7 @@ void rxPinChanged() {
   switch (syncClkState)
   {
     case NoSync:
-      if(pinVoltageState){
-        syncClkState = NoSync;
-      }
-      else{
-        syncClkState = Bit1;
-      }
+      syncClkState = rxErrorHandling(pinVoltageState);
       break;
     case Bit1:
       if(pinVoltageState){
@@ -151,7 +148,7 @@ void rxPinChanged() {
         syncClkState = Bit2;
       }
       else{
-        syncClkState = Bit1;
+        syncClkState = rxErrorHandling(pinVoltageState);
       }
       break;
     case Bit2:
@@ -178,22 +175,22 @@ void rxPinChanged() {
     case Bit9:
       halfPeriod = bufferAverage((uint8_t)Bit9) / 2;
       rxFrame[0] = 0b01010101;
+      currentBitPos = 9;
 
       enum lastSymbol currentLastSymbol = getLastSymbol(TimeSinceLastTransitionInUS, pinVoltageState, true);
       if(currentLastSymbol == HalfPeriod){
         syncClkState = HighVoltageHalf;
       }
       else if(currentLastSymbol == Period){
-        AddBit(0);
-        syncClkState = HighVoltageInSync;
-      }
-      else{
-        if(pinVoltageState){
-          syncClkState = NoSync;
+        if(addBitAndCheckEndOfFrame(false)){
+          syncClkState = rxErrorHandling(pinVoltageState);
         }
         else{
-          syncClkState = Bit1;
+          syncClkState = HighVoltageInSync;
         }
+      }
+      else{
+        syncClkState = rxErrorHandling(pinVoltageState);
       }
       break;
     case LowVoltageInSync:
@@ -202,16 +199,15 @@ void rxPinChanged() {
         syncClkState = HighVoltageHalf;
       }
       else if(currentLastSymbol == Period){
-        AddBit(0);
-        syncClkState = HighVoltageInSync;
-      }
-      else{
-        if(pinVoltageState){
-          syncClkState = NoSync;
+        if(addBitAndCheckEndOfFrame(false)){
+          syncClkState = rxErrorHandling(pinVoltageState);
         }
         else{
-          syncClkState = Bit1;
+          syncClkState = HighVoltageInSync;
         }
+      }
+      else{
+        syncClkState = rxErrorHandling(pinVoltageState);
       }
       break;
     case HighVoltageInSync:
@@ -220,52 +216,49 @@ void rxPinChanged() {
         syncClkState = LowVoltageHalf;
       }
       else if(currentLastSymbol == Period){
-        AddBit(1);
-        syncClkState = LowVoltageInSync;
-      }
-      else{
-        if(pinVoltageState){
-          syncClkState = NoSync;
+        if(addBitAndCheckEndOfFrame(true)){
+          syncClkState = rxErrorHandling(pinVoltageState);
         }
         else{
-          syncClkState = Bit1;
+          syncClkState = LowVoltageInSync;
         }
+      }
+      else{
+        syncClkState = rxErrorHandling(pinVoltageState);
       }
       break;
     case LowVoltageHalf:
       enum lastSymbol currentLastSymbol = getLastSymbol(TimeSinceLastTransitionInUS, pinVoltageState, true);
       if(currentLastSymbol == HalfPeriod){
-        AddBit(0);
-        syncClkState = HighVoltageInSync;
-      }
-      else if(currentLastSymbol == Period){
-        syncClkState = Bit1;
-      }
-      else{
-        if(pinVoltageState){
-          syncClkState = NoSync;
+        if(addBitAndCheckEndOfFrame(false)){
+          syncClkState = rxErrorHandling(pinVoltageState);
         }
         else{
-          syncClkState = Bit1;
+          syncClkState = HighVoltageInSync;
         }
+      }
+      else if(currentLastSymbol == Period){
+        syncClkState = rxErrorHandling(pinVoltageState);
+      }
+      else{
+        syncClkState = rxErrorHandling(pinVoltageState);
       }
       break;
     case HighVoltageHalf:
       enum lastSymbol currentLastSymbol = getLastSymbol(TimeSinceLastTransitionInUS, pinVoltageState, false);
       if(currentLastSymbol == HalfPeriod){
-        AddBit(1);
-        syncClkState = HighVoltageInSync;
-      }
-      else if(currentLastSymbol == Period){
-        syncClkState = NoSync;
-      }
-      else{
-        if(pinVoltageState){
-          syncClkState = NoSync;
+        if(addBitAndCheckEndOfFrame(true)){
+          syncClkState = rxErrorHandling(pinVoltageState);
         }
         else{
-          syncClkState = Bit1;
+          syncClkState = LowVoltageInSync;
         }
+      }
+      else if(currentLastSymbol == Period){
+        syncClkState = rxErrorHandling(pinVoltageState);
+      }
+      else{
+        syncClkState = rxErrorHandling(pinVoltageState);
       }
       break;
   }
@@ -307,6 +300,15 @@ enum syncClk nextSyncClkState(int64_t TimeSinceLastTransition, bool currentVolta
         return Bit1;
       }
     }
+  }
+}
+
+enum syncClk rxErrorHandling(bool currentVoltage){
+  if(currentVoltage){
+    return NoSync;
+  }
+  else{
+    return Bit1;
   }
 }
 
@@ -352,4 +354,31 @@ enum lastSymbol getLastSymbol(int64_t TimeSinceLastTransition, bool currentVolta
   else{
     return Error;
   }
+}
+
+bool addBitAndCheckEndOfFrame(bool bitValue){
+  uint16_t bytePos = (currentBitPos - 1) / 8;
+  uint8_t bitByteOffset = (currentBitPos - 1) % 8;
+
+  if(bitValue){
+    rxFrame[bytePos] |= 1 << bitByteOffset;
+  }
+  else{
+    rxFrame[bytePos] &= ~(1 << bitByteOffset);
+  }
+
+  currentBitPos++;
+
+  if(currentBitPos > 262*8){
+    return true;
+  }
+  bytePos = (currentBitPos - 1) / 8;
+  bitByteOffset = (currentBitPos - 1) % 8;
+  if(currentBitPos == 0 && rxFrame[bytePos-1] == 0b01111110 && bytePos > 3){
+    if(bytePos == rxFrame[3] + 7){
+      rxFrameReadyFlag = true;
+      return true;
+    }
+  }
+  return false;
 }
