@@ -1,4 +1,5 @@
 #include <vector>
+#include "CRC16.h"
 
 enum class State {
   IDLE,
