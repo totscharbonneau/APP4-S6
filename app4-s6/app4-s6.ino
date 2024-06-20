@@ -39,12 +39,15 @@ uint16_t currentBitPos;
 
 
 void readFrame();
+std::vector<uint8_t> createFrame();
 const int lenghtFrame = 17;
 //uint8_t rxFrame[lenghtFrame] = {85,126,0,5,1,1,1,1,0,0,0,0,0,0,0,0,0}; 
 
 void readFrame() {
     uint8_t lenghtData;
+    CRC16 crc;
     std::vector<uint8_t> data;
+    uint16_t crcVal;
     for (int i = 0; i < lenghtFrame; i++) {
 
         switch (currentState) {
@@ -90,9 +93,27 @@ void readFrame() {
                 break;
 
             case State::CONTROL:
-                // Serial.println("State: CONTROL");
-                // do stuff here
-                nextState = State::END; // Example transition
+                if (i == 4 + lenghtData - 1){
+                  crcVal = rxFrame[i] << 8;
+                  nextState = State::CONTROL;
+                  break;
+                }
+                else if(i == 4 + lenghtData){
+                  crcVal |= rxFrame[i] & 0b11111111;
+
+                  for(int j = 0; j < lenghtData; j++){
+                  crc.add(data[j]);
+                  }
+                  if(crc.calc() == crcVal){
+                    currentState = State::END;
+                  }
+                  else {
+                    Serial.println("CRC ERROR");
+                    nextState = State::END;
+                    break;
+                  }
+                }
+                Serial.println("error line 95 and 100");
                 break;
 
             case State::END:
@@ -115,17 +136,38 @@ void printVector(std::vector< uint8_t > data) {
   Serial.println(">");
 }
 
+std::vector<uint8_t> createFrame(uint8_t *payload, uint8_t size){
+  // uint8_t payload[8] = {1,1,1,1,1,1,1,1};
+  CRC16 crc;
+  crc.add(payload, size);
+  uint16_t crcVal = crc.calc();
 
+  std::vector<uint8_t> frame{};
+  frame.push_back(0b01010101); //preable
+  frame.push_back(0b01111110); //start
+  frame.push_back(0b00000000); //type/flag
+  frame.push_back(size); //size
+  for(int i = 0; i < size; i++){
+    frame.push_back(payload[i]);
+  }
+  frame.push_back((crcVal >> 8) & 0b11111111);  // CRC
+  frame.push_back(crcVal & 0b11111111);         // CRC
+  frame.push_back(0b01111110);
+  return frame;
+}
 
 void setup() {
   Serial.begin(115200);
+  Serial.println(__FILE__);
   pinMode(RX_PIN, INPUT_PULLUP);
   
-  attachInterrupt(digitalPinToInterrupt(RX_PIN), rxPinChanged, CHANGE);
+  uint8_t Frame[8] = {1,1,54,1,1,54,1,1};
+  uint8_t size = 8;
+  printVector(createFrame(Frame,size));
+  // attachInterrupt(digitalPinToInterrupt(RX_PIN), rxPinChanged, CHANGE);
 }
 
 void loop() {
-  readFrame();
 }
 
 void rxPinChanged() {
