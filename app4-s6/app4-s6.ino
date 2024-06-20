@@ -39,7 +39,7 @@ uint16_t currentBitPos;
 
 void readFrame();
 const int lenghtFrame = 17;
-uint8_t rxFrame[lenghtFrame] = {85,126,0,5,1,1,1,1,0,0,0,0,0,0,0,0,0}; 
+//uint8_t rxFrame[lenghtFrame] = {85,126,0,5,1,1,1,1,0,0,0,0,0,0,0,0,0}; 
 
 void readFrame() {
     uint8_t lenghtData;
@@ -135,6 +135,7 @@ void rxPinChanged() {
 
   //Get current pin voltage state
   bool pinVoltageState = digitalRead(RX_PIN);
+  enum lastSymbol currentLastSymbol;
 
   //Sync clock on preambule
   switch (syncClkState)
@@ -152,32 +153,32 @@ void rxPinChanged() {
       }
       break;
     case Bit2:
-      syncClkState = nextSyncClkState(TimeSinceLastTransitionInUS, pinVoltageState, (uint8_t)Bit2)
+      syncClkState = nextSyncClkState(TimeSinceLastTransitionInUS, pinVoltageState, (uint8_t)Bit2);
       break;
     case Bit3:
-      syncClkState = nextSyncClkState(TimeSinceLastTransitionInUS, pinVoltageState, (uint8_t)Bit3)
+      syncClkState = nextSyncClkState(TimeSinceLastTransitionInUS, pinVoltageState, (uint8_t)Bit3);
       break;
     case Bit4:
-      syncClkState = nextSyncClkState(TimeSinceLastTransitionInUS, pinVoltageState, (uint8_t)Bit4)
+      syncClkState = nextSyncClkState(TimeSinceLastTransitionInUS, pinVoltageState, (uint8_t)Bit4);
       break;
     case Bit5:
-      syncClkState = nextSyncClkState(TimeSinceLastTransitionInUS, pinVoltageState, (uint8_t)Bit5)
+      syncClkState = nextSyncClkState(TimeSinceLastTransitionInUS, pinVoltageState, (uint8_t)Bit5);
       break;
     case Bit6:
-      syncClkState = nextSyncClkState(TimeSinceLastTransitionInUS, pinVoltageState, (uint8_t)Bit6)
+      syncClkState = nextSyncClkState(TimeSinceLastTransitionInUS, pinVoltageState, (uint8_t)Bit6);
       break;
     case Bit7:
-      syncClkState = nextSyncClkState(TimeSinceLastTransitionInUS, pinVoltageState, (uint8_t)Bit7)
+      syncClkState = nextSyncClkState(TimeSinceLastTransitionInUS, pinVoltageState, (uint8_t)Bit7);
       break;
     case Bit8:
-      syncClkState = nextSyncClkState(TimeSinceLastTransitionInUS, pinVoltageState, (uint8_t)Bit8)
+      syncClkState = nextSyncClkState(TimeSinceLastTransitionInUS, pinVoltageState, (uint8_t)Bit8);
       break;
     case Bit9:
       halfPeriod = bufferAverage((uint8_t)Bit9) / 2;
       rxFrame[0] = 0b01010101;
       currentBitPos = 9;
 
-      enum lastSymbol currentLastSymbol = getLastSymbol(TimeSinceLastTransitionInUS, pinVoltageState, true);
+      currentLastSymbol = getLastSymbol(TimeSinceLastTransitionInUS, pinVoltageState, true);
       if(currentLastSymbol == HalfPeriod){
         syncClkState = HighVoltageHalf;
       }
@@ -194,7 +195,7 @@ void rxPinChanged() {
       }
       break;
     case LowVoltageInSync:
-      enum lastSymbol currentLastSymbol = getLastSymbol(TimeSinceLastTransitionInUS, pinVoltageState, true);
+      currentLastSymbol = getLastSymbol(TimeSinceLastTransitionInUS, pinVoltageState, true);
       if(currentLastSymbol == HalfPeriod){
         syncClkState = HighVoltageHalf;
       }
@@ -211,7 +212,7 @@ void rxPinChanged() {
       }
       break;
     case HighVoltageInSync:
-      enum lastSymbol currentLastSymbol = getLastSymbol(TimeSinceLastTransitionInUS, pinVoltageState, false);
+      currentLastSymbol = getLastSymbol(TimeSinceLastTransitionInUS, pinVoltageState, false);
       if(currentLastSymbol == HalfPeriod){
         syncClkState = LowVoltageHalf;
       }
@@ -228,7 +229,7 @@ void rxPinChanged() {
       }
       break;
     case LowVoltageHalf:
-      enum lastSymbol currentLastSymbol = getLastSymbol(TimeSinceLastTransitionInUS, pinVoltageState, true);
+      currentLastSymbol = getLastSymbol(TimeSinceLastTransitionInUS, pinVoltageState, true);
       if(currentLastSymbol == HalfPeriod){
         if(addBitAndCheckEndOfFrame(false)){
           syncClkState = rxErrorHandling(pinVoltageState);
@@ -245,7 +246,7 @@ void rxPinChanged() {
       }
       break;
     case HighVoltageHalf:
-      enum lastSymbol currentLastSymbol = getLastSymbol(TimeSinceLastTransitionInUS, pinVoltageState, false);
+      currentLastSymbol = getLastSymbol(TimeSinceLastTransitionInUS, pinVoltageState, false);
       if(currentLastSymbol == HalfPeriod){
         if(addBitAndCheckEndOfFrame(true)){
           syncClkState = rxErrorHandling(pinVoltageState);
