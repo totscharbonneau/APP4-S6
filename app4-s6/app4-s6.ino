@@ -148,9 +148,7 @@ void rxPinChanged() {
         noSyncPeriodAvgBuf[0] = TimeSinceLastTransitionInUS;
         syncClkState = Bit2;
       }
-      else{
-        syncClkState = rxErrorHandling(pinVoltageState);
-      }
+      else syncClkState = rxErrorHandling(pinVoltageState);
       break;
     case Bit2:
       syncClkState = nextSyncClkState(TimeSinceLastTransitionInUS, pinVoltageState, Bit2);
@@ -174,163 +172,68 @@ void rxPinChanged() {
       syncClkState = nextSyncClkState(TimeSinceLastTransitionInUS, pinVoltageState, Bit8);
       break;
     case Bit9:
-      halfPeriod = bufferAverage((uint8_t)Bit9) / 2;
+      halfPeriod = bufferAverage(Bit9) / 2;
       rxFrame[0] = 0b01010101;
       currentBitPos = 9;
 
       currentLastSymbol = getLastSymbol(TimeSinceLastTransitionInUS, pinVoltageState, true);
-      if(currentLastSymbol == HalfPeriod){
-        syncClkState = HighVoltageHalf;
-      }
-      else if(currentLastSymbol == Period){
-        if(addBitAndCheckEndOfFrame(false)){
-          syncClkState = rxErrorHandling(pinVoltageState);
-        }
-        else{
-          syncClkState = HighVoltageInSync;
-        }
-      }
-      else{
-        syncClkState = rxErrorHandling(pinVoltageState);
-      }
+      if(currentLastSymbol == HalfPeriod)   syncClkState = HighVoltageHalf;
+      else if(currentLastSymbol == Period)  syncClkState = addBitAndCheckEndOfFrame(false) ? rxErrorHandling(pinVoltageState) : HighVoltageInSync;
+      else                                  syncClkState = rxErrorHandling(pinVoltageState);
       break;
     case LowVoltageInSync:
       currentLastSymbol = getLastSymbol(TimeSinceLastTransitionInUS, pinVoltageState, true);
-      if(currentLastSymbol == HalfPeriod){
-        syncClkState = HighVoltageHalf;
-      }
-      else if(currentLastSymbol == Period){
-        if(addBitAndCheckEndOfFrame(false)){
-          syncClkState = rxErrorHandling(pinVoltageState);
-        }
-        else{
-          syncClkState = HighVoltageInSync;
-        }
-      }
-      else{
-        syncClkState = rxErrorHandling(pinVoltageState);
-      }
+      if(currentLastSymbol == HalfPeriod)   syncClkState = HighVoltageHalf;
+      else if(currentLastSymbol == Period)  syncClkState = addBitAndCheckEndOfFrame(false) ? rxErrorHandling(pinVoltageState) : HighVoltageInSync;
+      else                                  syncClkState = rxErrorHandling(pinVoltageState);
       break;
     case HighVoltageInSync:
       currentLastSymbol = getLastSymbol(TimeSinceLastTransitionInUS, pinVoltageState, false);
-      if(currentLastSymbol == HalfPeriod){
-        syncClkState = LowVoltageHalf;
-      }
-      else if(currentLastSymbol == Period){
-        if(addBitAndCheckEndOfFrame(true)){
-          syncClkState = rxErrorHandling(pinVoltageState);
-        }
-        else{
-          syncClkState = LowVoltageInSync;
-        }
-      }
-      else{
-        syncClkState = rxErrorHandling(pinVoltageState);
-      }
+      if(currentLastSymbol == HalfPeriod)   syncClkState = LowVoltageHalf;
+      else if(currentLastSymbol == Period)  syncClkState = addBitAndCheckEndOfFrame(true) ? rxErrorHandling(pinVoltageState) : LowVoltageInSync;
+      else                                  syncClkState = rxErrorHandling(pinVoltageState);
       break;
     case LowVoltageHalf:
       currentLastSymbol = getLastSymbol(TimeSinceLastTransitionInUS, pinVoltageState, true);
-      if(currentLastSymbol == HalfPeriod){
-        if(addBitAndCheckEndOfFrame(false)){
-          syncClkState = rxErrorHandling(pinVoltageState);
-        }
-        else{
-          syncClkState = HighVoltageInSync;
-        }
-      }
-      else if(currentLastSymbol == Period){
-        syncClkState = rxErrorHandling(pinVoltageState);
-      }
-      else{
-        syncClkState = rxErrorHandling(pinVoltageState);
-      }
+      if(currentLastSymbol == HalfPeriod)   syncClkState = addBitAndCheckEndOfFrame(false) ? rxErrorHandling(pinVoltageState) : HighVoltageInSync;
+      else                                  syncClkState = rxErrorHandling(pinVoltageState);
       break;
     case HighVoltageHalf:
       currentLastSymbol = getLastSymbol(TimeSinceLastTransitionInUS, pinVoltageState, false);
-      if(currentLastSymbol == HalfPeriod){
-        if(addBitAndCheckEndOfFrame(true)){
-          syncClkState = rxErrorHandling(pinVoltageState);
-        }
-        else{
-          syncClkState = LowVoltageInSync;
-        }
-      }
-      else if(currentLastSymbol == Period){
-        syncClkState = rxErrorHandling(pinVoltageState);
-      }
-      else{
-        syncClkState = rxErrorHandling(pinVoltageState);
-      }
+      if(currentLastSymbol == HalfPeriod)   syncClkState = addBitAndCheckEndOfFrame(true) ? rxErrorHandling(pinVoltageState) : LowVoltageInSync;
+      else                                  syncClkState = rxErrorHandling(pinVoltageState);
       break;
   }
 }
 
 uint8_t nextSyncClkState(int64_t TimeSinceLastTransition, bool currentVoltage, uint8_t BitNumber){
   bool expectedVoltage;
-  if(BitNumber == 2 || BitNumber == 4 || BitNumber == 6 || BitNumber == 8){
-    expectedVoltage = false;
-  }
-  else{
-    expectedVoltage = true;
-  }
+  if(BitNumber == 2 || BitNumber == 4 || BitNumber == 6 || BitNumber == 8)  expectedVoltage = false;
+  else                                                                      expectedVoltage = true;
 
-  if(expectedVoltage){
-    if(currentVoltage){
-      if(withinAverageRange(TimeSinceLastTransition, BitNumber)){
-        noSyncPeriodAvgBuf[BitNumber-1] = TimeSinceLastTransition;
-        return BitNumber+1;
-      }
-      else{
-        return NoSync;
-      }
-    }
-    else{
-      return Bit1;
-    }
+  if(currentVoltage == expectedVoltage && withinRange(bufferAverage(BitNumber), TimeSinceLastTransition)){
+    noSyncPeriodAvgBuf[BitNumber-1] = TimeSinceLastTransition;
+    return BitNumber+1;
   }
-  else{
-    if(currentVoltage){
-      return NoSync;
-    }
-    else{
-      if(withinAverageRange(TimeSinceLastTransition, BitNumber)){
-        noSyncPeriodAvgBuf[BitNumber-1] = TimeSinceLastTransition;
-        return BitNumber+1;
-      }
-      else{
-        return Bit1;
-      }
-    }
-  }
+  else return rxErrorHandling(currentVoltage);
 }
 
 uint8_t rxErrorHandling(bool currentVoltage){
-  if(currentVoltage){
-    return NoSync;
-  }
-  else{
-    return Bit1;
-  }
+  if(currentVoltage)  return NoSync;
+  else                return Bit1;
 }
 
-bool withinAverageRange(int64_t comparedInt, uint8_t BitNumber){
-  int64_t average = bufferAverage(BitNumber);
-  return withinRange(average, comparedInt);
-}
-
+//Check if comparedInt is within range of selectedInt
 bool withinRange(int64_t selectedInt, int64_t comparedInt){
   int64_t range = selectedInt * WITHIN_RANGE;
   int64_t selectedPlusRange = selectedInt + range;
   int64_t selectedMinusRange = selectedInt - range;
 
-  if(comparedInt >= selectedMinusRange && comparedInt <= selectedPlusRange){
-    return true;
-  }
-  else{
-    return false;
-  }
+  if(comparedInt >= selectedMinusRange && comparedInt <= selectedPlusRange) return true;
+  else                                                                      return false;
 }
 
+//Calculate average from buffer from 0 to BitNumber elements
 int64_t bufferAverage(uint8_t BitNumber){
   int64_t average = 0;
   for(uint8_t i=0; i < BitNumber; i++){
@@ -342,39 +245,35 @@ int64_t bufferAverage(uint8_t BitNumber){
 enum lastSymbol getLastSymbol(int64_t TimeSinceLastTransition, bool currentVoltage, bool expectedVoltage){
   int64_t period = halfPeriod * 2;
 
-  if(currentVoltage != expectedVoltage){
-    return Error;
-  }
+  //Detect missed transition and error out
+  if(currentVoltage != expectedVoltage) return Error;
 
-  if(withinRange(halfPeriod, TimeSinceLastTransition)){
-    return HalfPeriod;
-  }
-  else if(withinRange(period, TimeSinceLastTransition)){
-    return Period;
-  }
-  else{
-    return Error;
-  }
+  //Detect last symbol (half-period or period)
+  if(withinRange(halfPeriod, TimeSinceLastTransition))  return HalfPeriod;
+  else if(withinRange(period, TimeSinceLastTransition)) return Period;
+  else                                                  return Error;
 }
 
 bool addBitAndCheckEndOfFrame(bool bitValue){
+  //Calculate bit position
   uint16_t bytePos = (currentBitPos - 1) / 8;
   uint8_t bitByteOffset = (currentBitPos - 1) % 8;
 
-  if(bitValue){
-    rxFrame[bytePos] |= 1 << bitByteOffset;
-  }
-  else{
-    rxFrame[bytePos] &= ~(1 << bitByteOffset);
-  }
+  //Add bit to Frame buffer
+  if(bitValue)  rxFrame[bytePos] |= 1 << bitByteOffset;
+  else          rxFrame[bytePos] &= ~(1 << bitByteOffset);
 
+  //Update bit position
   currentBitPos++;
 
-  if(currentBitPos > 262*8){
-    return true;
-  }
+  //Recalculate bit position
   bytePos = (currentBitPos - 1) / 8;
   bitByteOffset = (currentBitPos - 1) % 8;
+
+  //Detect bad frame (too long)
+  if(currentBitPos > 262*8) return true;
+
+  //Check if end of valid frame
   if(currentBitPos == 0 && rxFrame[bytePos-1] == 0b01111110 && bytePos > 3){
     if(bytePos == rxFrame[3] + 7){
       rxFrameReadyFlag = true;
