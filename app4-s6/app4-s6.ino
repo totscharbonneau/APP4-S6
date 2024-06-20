@@ -340,7 +340,7 @@ int64_t bufferAverage(uint8_t BitNumber){
 }
 
 enum lastSymbol getLastSymbol(int64_t TimeSinceLastTransition, bool currentVoltage, bool expectedVoltage){
-  period = halfPeriod * 2;
+  int64_t period = halfPeriod * 2;
 
   if(currentVoltage != expectedVoltage){
     return Error;
