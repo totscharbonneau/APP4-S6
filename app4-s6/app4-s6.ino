@@ -153,25 +153,25 @@ void rxPinChanged() {
       }
       break;
     case Bit2:
-      syncClkState = nextSyncClkState(TimeSinceLastTransitionInUS, pinVoltageState, (uint8_t)Bit2);
+      syncClkState = nextSyncClkState(TimeSinceLastTransitionInUS, pinVoltageState, Bit2);
       break;
     case Bit3:
-      syncClkState = nextSyncClkState(TimeSinceLastTransitionInUS, pinVoltageState, (uint8_t)Bit3);
+      syncClkState = nextSyncClkState(TimeSinceLastTransitionInUS, pinVoltageState, Bit3);
       break;
     case Bit4:
-      syncClkState = nextSyncClkState(TimeSinceLastTransitionInUS, pinVoltageState, (uint8_t)Bit4);
+      syncClkState = nextSyncClkState(TimeSinceLastTransitionInUS, pinVoltageState, Bit4);
       break;
     case Bit5:
-      syncClkState = nextSyncClkState(TimeSinceLastTransitionInUS, pinVoltageState, (uint8_t)Bit5);
+      syncClkState = nextSyncClkState(TimeSinceLastTransitionInUS, pinVoltageState, Bit5);
       break;
     case Bit6:
-      syncClkState = nextSyncClkState(TimeSinceLastTransitionInUS, pinVoltageState, (uint8_t)Bit6);
+      syncClkState = nextSyncClkState(TimeSinceLastTransitionInUS, pinVoltageState, Bit6);
       break;
     case Bit7:
-      syncClkState = nextSyncClkState(TimeSinceLastTransitionInUS, pinVoltageState, (uint8_t)Bit7);
+      syncClkState = nextSyncClkState(TimeSinceLastTransitionInUS, pinVoltageState, Bit7);
       break;
     case Bit8:
-      syncClkState = nextSyncClkState(TimeSinceLastTransitionInUS, pinVoltageState, (uint8_t)Bit8);
+      syncClkState = nextSyncClkState(TimeSinceLastTransitionInUS, pinVoltageState, Bit8);
       break;
     case Bit9:
       halfPeriod = bufferAverage((uint8_t)Bit9) / 2;
@@ -265,7 +265,7 @@ void rxPinChanged() {
   }
 }
 
-enum syncClk nextSyncClkState(int64_t TimeSinceLastTransition, bool currentVoltage, uint8_t BitNumber){
+enum syncClk nextSyncClkState(int64_t TimeSinceLastTransition, bool currentVoltage, enum syncClk BitNumber){
   bool expectedVoltage;
   if(BitNumber == 2 || BitNumber == 4 || BitNumber == 6 || BitNumber == 8){
     expectedVoltage = false;
@@ -276,9 +276,9 @@ enum syncClk nextSyncClkState(int64_t TimeSinceLastTransition, bool currentVolta
 
   if(expectedVoltage){
     if(currentVoltage){
-      if(withinAverageRange(TimeSinceLastTransition, BitNumber)){
+      if(withinAverageRange(TimeSinceLastTransition, (uint8_t) BitNumber)){
         noSyncPeriodAvgBuf[BitNumber-1] = TimeSinceLastTransition;
-        return (enum syncClk)BitNumber+1;
+        return BitNumber+1;
       }
       else{
         return NoSync;
@@ -293,9 +293,9 @@ enum syncClk nextSyncClkState(int64_t TimeSinceLastTransition, bool currentVolta
       return NoSync;
     }
     else{
-      if(withinAverageRange(TimeSinceLastTransition, BitNumber)){
+      if(withinAverageRange(TimeSinceLastTransition, (uint8_t) BitNumber)){
         noSyncPeriodAvgBuf[BitNumber-1] = TimeSinceLastTransition;
-        return (enum syncClk)BitNumber+1;
+        return BitNumber+1;
       }
       else{
         return Bit1;
