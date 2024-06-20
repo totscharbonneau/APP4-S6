@@ -30,7 +30,7 @@ State nextState;
 //rxPinChanged() ISR VARIABLES
 int64_t lastRXTransitionTime = 0;
 enum syncClk {NoSync = 0, Bit1 = 1, Bit2 = 2, Bit3 = 3, Bit4 = 4, Bit5 = 5, Bit6 = 6, Bit7 = 7, Bit8 = 8, Bit9 = 9, LowVoltageInSync = 10, HighVoltageInSync = 11, LowVoltageHalf = 12, HighVoltageHalf = 13};
-enum syncClk syncClkState = NoSync;
+uint8_t syncClkState = NoSync;
 int64_t noSyncPeriodAvgBuf[7];
 int64_t halfPeriod;
 enum lastSymbol {HalfPeriod, Period, Error};
@@ -265,7 +265,7 @@ void rxPinChanged() {
   }
 }
 
-enum syncClk nextSyncClkState(int64_t TimeSinceLastTransition, bool currentVoltage, enum syncClk BitNumber){
+uint8_t nextSyncClkState(int64_t TimeSinceLastTransition, bool currentVoltage, uint8_t BitNumber){
   bool expectedVoltage;
   if(BitNumber == 2 || BitNumber == 4 || BitNumber == 6 || BitNumber == 8){
     expectedVoltage = false;
@@ -276,7 +276,7 @@ enum syncClk nextSyncClkState(int64_t TimeSinceLastTransition, bool currentVolta
 
   if(expectedVoltage){
     if(currentVoltage){
-      if(withinAverageRange(TimeSinceLastTransition, (uint8_t) BitNumber)){
+      if(withinAverageRange(TimeSinceLastTransition, BitNumber)){
         noSyncPeriodAvgBuf[BitNumber-1] = TimeSinceLastTransition;
         return BitNumber+1;
       }
@@ -293,7 +293,7 @@ enum syncClk nextSyncClkState(int64_t TimeSinceLastTransition, bool currentVolta
       return NoSync;
     }
     else{
-      if(withinAverageRange(TimeSinceLastTransition, (uint8_t) BitNumber)){
+      if(withinAverageRange(TimeSinceLastTransition, BitNumber)){
         noSyncPeriodAvgBuf[BitNumber-1] = TimeSinceLastTransition;
         return BitNumber+1;
       }
@@ -304,7 +304,7 @@ enum syncClk nextSyncClkState(int64_t TimeSinceLastTransition, bool currentVolta
   }
 }
 
-enum syncClk rxErrorHandling(bool currentVoltage){
+uint8_t rxErrorHandling(bool currentVoltage){
   if(currentVoltage){
     return NoSync;
   }
