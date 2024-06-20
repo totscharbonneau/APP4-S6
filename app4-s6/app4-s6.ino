@@ -203,8 +203,8 @@ void send(void *pvParameters){
   };
   
   std::vector<uint8_t> message1 = createFrame(payloadArray, size);   // success
-  Serial.println("message : ");
-  printVector(message1);
+  // Serial.println("message : ");
+  // printVector(message1);
   sendTaskTime = micros();
   for(int i = 0; i < message1.size(); ++i) {
     sendByte(message1[i]);
@@ -237,7 +237,7 @@ void receive(void *pvParameters) {
     Serial.println("taskreceive");
     int periodElapse;
     int rxVal;
-
+    buffer.push_back(0);
     for (;;) {
         auto currentTime = micros();
         periodElapse = currentTime - lastChangeTime;
@@ -262,30 +262,48 @@ void receive(void *pvParameters) {
                     checkPeriod = true;
                 }
             } else { // First bit
-                buffer.push_back(rxVal); // Add first bit to buffer
+                buffer.push_back(0); // Add first bit to buffer
             }
             lastChangeTime = currentTime;
         }
         // Check if a complete byte (8 bits) has been accumulated
-        if (buffer.size() >= 8) {
-            uint8_t currentByte = 0;
-            for (int i = 0; i < 8; ++i) {
-                currentByte |= buffer[i] << (7 - i);
-            }
-            receivedBytes.push_back(currentByte);
-            printVector(receivedBytes);
-            buffer.clear(); // Clear buffer after forming a byte
+        if (buffer.size() >= 11*8) {
+            processBuffer();
+            buffer.clear();
         }
+            // uint8_t currentByte = 0;
+            // for (int i = 0; i < 8; ++i) {
+            //     currentByte |= buffer[i] << (7 - i);
+            // }
+            // receivedBytes.push_back(currentByte);
+            // printVector(receivedBytes);
+            // buffer.clear(); // Clear buffer after forming a byte
+        
 
-        if (receivedBytes.size() == 11){
-          rxFrame = receivedBytes.data();
-          readFrame();
-          receivedBytes.clear();
-        }
+        // if (receivedBytes.size() == 11){
+        //   rxFrame = receivedBytes.data();
+        //   readFrame();
+        //   receivedBytes.clear();
+        // }
 
-        vTaskDelay(xDelay); // Delay before checking again
+        vTaskDelay(1); // Delay before checking again
     }
 }
+
+void processBuffer() {
+    // Assuming each byte is 8 bits
+    // Convert bits in buffer to bytes
+    for (size_t i = 0; i < buffer.size(); i += 8) {
+        uint8_t byte = 0;
+        for (int j = 0; j < 8; ++j) {
+            byte |= buffer[i + j] << (7 - j);
+           
+        }
+      receivedBytes.push_back(byte);
+    }
+  printVector(receivedBytes);
+}
+
 
 void rxPinChanged() {
   //Calculate Time since last transition
