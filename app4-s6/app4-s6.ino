@@ -3,14 +3,25 @@
 #include "CRC16.h"
 
 //GLOBAL CONSTANTS
-const uint8_t RX_PIN = 32;
+const int RX_PIN = 13;
+const int TX_PIN = 33;
 const float WITHIN_RANGE = 0.1;
+bool receivedBit = false;
+bool checkPeriod = false;
+unsigned long lastChangeTime = 0;
+unsigned long sendTaskTime = 0;
 
+const int HALF_PERIOD = 500;            // en micro
+const int THRESHOLD_PERIOD = 280;       // en micro
+const int TIME_BETWEEN_BITS = 5000;     // en micro
+const TickType_t xDelay = TIME_BETWEEN_BITS / 1000 * portTICK_PERIOD_MS; // en millis
 
 //GLOBAL VARIABLES
-uint8_t rxFrame[262];
+uint8_t* rxFrame;
 bool rxFrameReadyFlag = false;
 
+std::vector<uint8_t> receivedBytes;    // Vector to store received bytes
+std::vector<int> buffer;               // Buffer to accumulate received bits
 
 //TOTS VARIABLES
 enum class State {
@@ -37,13 +48,14 @@ int64_t halfPeriod;
 enum lastSymbol {HalfPeriod, Period, Error};
 uint16_t currentBitPos;
 
-
+void receivePulse();
 void readFrame();
 std::vector<uint8_t> createFrame();
 const int lenghtFrame = 17;
 //uint8_t rxFrame[lenghtFrame] = {85,126,0,5,1,1,1,1,0,0,0,0,0,0,0,0,0}; 
 
 void readFrame() {
+    Serial.println("readFrame");
     uint8_t lenghtData;
     CRC16 crc;
     std::vector<uint8_t> data;
@@ -159,15 +171,120 @@ std::vector<uint8_t> createFrame(uint8_t *payload, uint8_t size){
 void setup() {
   Serial.begin(115200);
   Serial.println(__FILE__);
-  pinMode(RX_PIN, INPUT_PULLUP);
+  pinMode(RX_PIN, INPUT);
+  pinMode(TX_PIN, OUTPUT);
   
-  uint8_t Frame[8] = {1,1,54,1,1,54,1,1};
-  uint8_t size = 8;
-  printVector(createFrame(Frame,size));
+
   // attachInterrupt(digitalPinToInterrupt(RX_PIN), rxPinChanged, CHANGE);
+
+  attachInterrupt(digitalPinToInterrupt(RX_PIN), receivePulse, CHANGE);
+  
+  xTaskCreate(send, "Send Trame", 2048, NULL, 2,  NULL);
+
+  xTaskCreate(receive, "receive Trame", 2048, NULL, 3,  NULL);
 }
 
 void loop() {
+}
+
+void IRAM_ATTR receivePulse() {
+  // Serial.println("interupt");
+  receivedBit = true;
+}
+
+void send(void *pvParameters){
+  Serial.println("send");
+  const uint8_t size = 4;
+  uint8_t payloadArray[size] = {
+    0b11011101, // 221
+    0b11011111, // 223
+    0b00011101, // 29
+    0b00000111, // 7
+  };
+  
+  std::vector<uint8_t> message1 = createFrame(payloadArray, size);   // success
+  Serial.println("message : ");
+  printVector(message1);
+  sendTaskTime = micros();
+  for(int i = 0; i < message1.size(); ++i) {
+    sendByte(message1[i]);
+  }
+
+  for (;;) {
+    // Serial.println("loop");
+    vTaskDelay(xDelay);
+  }
+}
+
+void sendByte(uint8_t bits) {
+  int val;
+  for(int i = 7; i >= 0; i--) {
+    val = (bits >> i) & 0x01;
+    sendPulse(val);
+    vTaskDelay(xDelay);
+  }
+}
+
+void sendPulse(int value) { // 0, 1
+  digitalWrite(TX_PIN, value);
+  delayMicroseconds(HALF_PERIOD);
+
+  digitalWrite(TX_PIN, !value);
+  delayMicroseconds(HALF_PERIOD);
+}
+
+void receive(void *pvParameters) {
+    Serial.println("taskreceive");
+    int periodElapse;
+    int rxVal;
+
+    for (;;) {
+        auto currentTime = micros();
+        periodElapse = currentTime - lastChangeTime;
+
+        if (!checkPeriod && (periodElapse >= HALF_PERIOD * 2 + TIME_BETWEEN_BITS - THRESHOLD_PERIOD) &&
+            (periodElapse <= HALF_PERIOD * 2 + TIME_BETWEEN_BITS + THRESHOLD_PERIOD)) {
+            checkPeriod = true;
+        }
+
+        if (receivedBit) {
+            // Serial.println(buffer.size());
+
+            receivedBit = false;
+            rxVal = digitalRead(RX_PIN);
+
+            if (buffer.size() != 0) {
+                if (checkPeriod) {
+                    if (periodElapse >= HALF_PERIOD - THRESHOLD_PERIOD) {
+                        buffer.push_back(!rxVal); // Add inverted rxVal to buffer
+                    }
+                } else {
+                    checkPeriod = true;
+                }
+            } else { // First bit
+                buffer.push_back(rxVal); // Add first bit to buffer
+            }
+            lastChangeTime = currentTime;
+        }
+        // Check if a complete byte (8 bits) has been accumulated
+        if (buffer.size() >= 8) {
+            uint8_t currentByte = 0;
+            for (int i = 0; i < 8; ++i) {
+                currentByte |= buffer[i] << (7 - i);
+            }
+            receivedBytes.push_back(currentByte);
+            printVector(receivedBytes);
+            buffer.clear(); // Clear buffer after forming a byte
+        }
+
+        if (receivedBytes.size() == 11){
+          rxFrame = receivedBytes.data();
+          readFrame();
+          receivedBytes.clear();
+        }
+
+        vTaskDelay(xDelay); // Delay before checking again
+    }
 }
 
 void rxPinChanged() {
