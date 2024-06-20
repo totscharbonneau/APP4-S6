@@ -3,7 +3,7 @@
 
 //GLOBAL CONSTANTS
 const uint8_t RX_PIN = 32;
-const float WITHIN_AVERAGE_RANGE = 0.1;
+const float WITHIN_RANGE = 0.1;
 
 
 //GLOBAL VARIABLES
@@ -28,10 +28,11 @@ State nextState;
 
 //rxPinChanged() ISR VARIABLES
 int64_t lastRXTransitionTime = 0;
-
-enum syncClk {NoSync, Bit1, Bit2, Bit3, Bit4, Bit5, Bit6, Bit7, Bit8};
+enum syncClk {NoSync = 0, Bit1 = 1, Bit2 = 2, Bit3 = 3, Bit4 = 4, Bit5 = 5, Bit6 = 6, Bit7 = 7, Bit8 = 8, Bit9 = 9, LowVoltageInSync = 10, HighVoltageInSync = 11, LowVoltageHalf = 12, HighVoltageHalf = 13};
 enum syncClk syncClkState = NoSync;
 int64_t noSyncPeriodAvgBuf[7];
+int64_t halfPeriod;
+enum lastSymbol {HalfPeriod, Period, Error};
 
 
 void readFrame();
@@ -137,7 +138,7 @@ void rxPinChanged() {
   switch (syncClkState)
   {
     case NoSync:
-      if(pinVoltageState == true){
+      if(pinVoltageState){
         syncClkState = NoSync;
       }
       else{
@@ -145,7 +146,7 @@ void rxPinChanged() {
       }
       break;
     case Bit1:
-      if(pinVoltageState == true){
+      if(pinVoltageState){
         noSyncPeriodAvgBuf[0] = TimeSinceLastTransitionInUS;
         syncClkState = Bit2;
       }
@@ -154,73 +155,201 @@ void rxPinChanged() {
       }
       break;
     case Bit2:
-      if(pinVoltageState == true){
-        syncClkState = NoSync;
+      syncClkState = nextSyncClkState(TimeSinceLastTransitionInUS, pinVoltageState, (uint8_t)Bit2)
+      break;
+    case Bit3:
+      syncClkState = nextSyncClkState(TimeSinceLastTransitionInUS, pinVoltageState, (uint8_t)Bit3)
+      break;
+    case Bit4:
+      syncClkState = nextSyncClkState(TimeSinceLastTransitionInUS, pinVoltageState, (uint8_t)Bit4)
+      break;
+    case Bit5:
+      syncClkState = nextSyncClkState(TimeSinceLastTransitionInUS, pinVoltageState, (uint8_t)Bit5)
+      break;
+    case Bit6:
+      syncClkState = nextSyncClkState(TimeSinceLastTransitionInUS, pinVoltageState, (uint8_t)Bit6)
+      break;
+    case Bit7:
+      syncClkState = nextSyncClkState(TimeSinceLastTransitionInUS, pinVoltageState, (uint8_t)Bit7)
+      break;
+    case Bit8:
+      syncClkState = nextSyncClkState(TimeSinceLastTransitionInUS, pinVoltageState, (uint8_t)Bit8)
+      break;
+    case Bit9:
+      halfPeriod = bufferAverage((uint8_t)Bit9) / 2;
+      rxFrame[0] = 0b01010101;
+
+      enum lastSymbol currentLastSymbol = getLastSymbol(TimeSinceLastTransitionInUS, pinVoltageState, true);
+      if(currentLastSymbol == HalfPeriod){
+        syncClkState = HighVoltageHalf;
+      }
+      else if(currentLastSymbol == Period){
+        AddBit(0);
+        syncClkState = HighVoltageInSync;
       }
       else{
-        if(withinAverageRange(TimeSinceLastTransitionInUS, 1)){
-          noSyncPeriodAvgBuf[1] = TimeSinceLastTransitionInUS;
-          syncClkState = Bit3;
+        if(pinVoltageState){
+          syncClkState = NoSync;
         }
         else{
           syncClkState = Bit1;
         }
       }
       break;
-    case Bit3:
-      if(pinVoltageState == true){
-        if(withinAverageRange(TimeSinceLastTransitionInUS, 2)){
-          noSyncPeriodAvgBuf[2] = TimeSinceLastTransitionInUS;
-          syncClkState = Bit4;
-        }
-        else{
-          syncClkState = NoSync;
-        }
+    case LowVoltageInSync:
+      enum lastSymbol currentLastSymbol = getLastSymbol(TimeSinceLastTransitionInUS, pinVoltageState, true);
+      if(currentLastSymbol == HalfPeriod){
+        syncClkState = HighVoltageHalf;
+      }
+      else if(currentLastSymbol == Period){
+        AddBit(0);
+        syncClkState = HighVoltageInSync;
       }
       else{
-        syncClkState = Bit1;
+        if(pinVoltageState){
+          syncClkState = NoSync;
+        }
+        else{
+          syncClkState = Bit1;
+        }
       }
       break;
-    case Bit4:
-      if(pinVoltageState == true){
+    case HighVoltageInSync:
+      enum lastSymbol currentLastSymbol = getLastSymbol(TimeSinceLastTransitionInUS, pinVoltageState, false);
+      if(currentLastSymbol == HalfPeriod){
+        syncClkState = LowVoltageHalf;
+      }
+      else if(currentLastSymbol == Period){
+        AddBit(1);
+        syncClkState = LowVoltageInSync;
+      }
+      else{
+        if(pinVoltageState){
+          syncClkState = NoSync;
+        }
+        else{
+          syncClkState = Bit1;
+        }
+      }
+      break;
+    case LowVoltageHalf:
+      enum lastSymbol currentLastSymbol = getLastSymbol(TimeSinceLastTransitionInUS, pinVoltageState, true);
+      if(currentLastSymbol == HalfPeriod){
+        AddBit(0);
+        syncClkState = HighVoltageInSync;
+      }
+      else if(currentLastSymbol == Period){
+        syncClkState = Bit1;
+      }
+      else{
+        if(pinVoltageState){
+          syncClkState = NoSync;
+        }
+        else{
+          syncClkState = Bit1;
+        }
+      }
+      break;
+    case HighVoltageHalf:
+      enum lastSymbol currentLastSymbol = getLastSymbol(TimeSinceLastTransitionInUS, pinVoltageState, false);
+      if(currentLastSymbol == HalfPeriod){
+        AddBit(1);
+        syncClkState = HighVoltageInSync;
+      }
+      else if(currentLastSymbol == Period){
         syncClkState = NoSync;
       }
       else{
-        if(withinAverageRange(TimeSinceLastTransitionInUS, 2)){
-          noSyncPeriodAvgBuf[2] = TimeSinceLastTransitionInUS;
-          syncClkState = Bit4;
+        if(pinVoltageState){
+          syncClkState = NoSync;
         }
         else{
-          syncClkState = NoSync;
+          syncClkState = Bit1;
         }
       }
       break;
-    case Bit5:
-      
-    case Bit6:
-      
-    case Bit7:
-      
-    case Bit8:
-      
+  }
+}
+
+enum syncClk nextSyncClkState(int64_t TimeSinceLastTransition, bool currentVoltage, uint8_t BitNumber){
+  bool expectedVoltage;
+  if(BitNumber == 2 || BitNumber == 4 || BitNumber == 6 || BitNumber == 8){
+    expectedVoltage = false;
+  }
+  else{
+    expectedVoltage = true;
+  }
+
+  if(expectedVoltage){
+    if(currentVoltage){
+      if(withinAverageRange(TimeSinceLastTransition, BitNumber)){
+        noSyncPeriodAvgBuf[BitNumber-1] = TimeSinceLastTransition;
+        return (enum syncClk)BitNumber+1;
+      }
+      else{
+        return NoSync;
+      }
+    }
+    else{
+      return Bit1;
+    }
+  }
+  else{
+    if(currentVoltage){
+      return NoSync;
+    }
+    else{
+      if(withinAverageRange(TimeSinceLastTransition, BitNumber)){
+        noSyncPeriodAvgBuf[BitNumber-1] = TimeSinceLastTransition;
+        return (enum syncClk)BitNumber+1;
+      }
+      else{
+        return Bit1;
+      }
+    }
   }
 }
 
 bool withinAverageRange(int64_t comparedInt, uint8_t BitNumber){
-  int64_t average = 0
-  for(uint8_t i=0; i < BitNumber; i++){
-    average += noSyncPeriodAvgBuf[i];
-  }
-  average = average / BitNumber;
+  int64_t average = bufferAverage(BitNumber);
+  return withinRange(average, comparedInt);
+}
 
-  int64_t range = average * WITHIN_AVERAGE_RANGE;
-  int64_t averagePlusRange = average + range;
-  int64_t averageMinusRange = average - range;
+bool withinRange(int64_t selectedInt, int64_t comparedInt){
+  int64_t range = selectedInt * WITHIN_RANGE;
+  int64_t selectedPlusRange = selectedInt + range;
+  int64_t selectedMinusRange = selectedInt - range;
 
-  if(comparedInt >= averageMinusRange && comparedInt <= averagePlusRange){
+  if(comparedInt >= selectedMinusRange && comparedInt <= selectedPlusRange){
     return true;
   }
   else{
     return false;
+  }
+}
+
+int64_t bufferAverage(uint8_t BitNumber){
+  int64_t average = 0;
+  for(uint8_t i=0; i < BitNumber; i++){
+    average += noSyncPeriodAvgBuf[i];
+  }
+  return average / BitNumber;
+}
+
+enum lastSymbol getLastSymbol(int64_t TimeSinceLastTransition, bool currentVoltage, bool expectedVoltage){
+  period = halfPeriod * 2;
+
+  if(currentVoltage != expectedVoltage){
+    return Error;
+  }
+
+  if(withinRange(halfPeriod, TimeSinceLastTransition)){
+    return HalfPeriod;
+  }
+  else if(withinRange(period, TimeSinceLastTransition)){
+    return Period;
+  }
+  else{
+    return Error;
   }
 }
