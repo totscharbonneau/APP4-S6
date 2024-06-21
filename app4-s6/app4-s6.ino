@@ -1,8 +1,9 @@
 #include "esp_timer.h"
+#include "driver/gpio.h"
 #include <vector>
 
 //GLOBAL CONSTANTS
-const uint8_t RX_PIN = 32;
+const auto RX_PIN = 33;
 const float WITHIN_RANGE = 0.1;
 
 
@@ -35,6 +36,8 @@ int64_t noSyncPeriodAvgBuf[7];
 int64_t halfPeriod;
 enum lastSymbol {HalfPeriod, Period, Error};
 uint16_t currentBitPos;
+bool hasReceived = false;
+bool pinVoltageState;
 
 
 void readFrame();
@@ -114,27 +117,91 @@ void printVector(std::vector< uint8_t > data) {
   Serial.println(">");
 }
 
-
-
-void setup() {
-  Serial.begin(115200);
-  pinMode(RX_PIN, INPUT_PULLUP);
-  
-  attachInterrupt(digitalPinToInterrupt(RX_PIN), rxPinChanged, CHANGE);
+uint8_t IRAM_ATTR rxErrorHandling(bool currentVoltage){
+  if(currentVoltage)  return NoSync;
+  else                return Bit1;
 }
 
-void loop() {
-  readFrame();
+//Calculate average from buffer from 0 to BitNumber elements
+int64_t IRAM_ATTR bufferAverage(uint8_t BitNumber){
+  int64_t average = 0;
+  for(uint8_t i=0; i < BitNumber; i++){
+    average += noSyncPeriodAvgBuf[i];
+  }
+  return average / BitNumber;
 }
 
-void rxPinChanged() {
+//Check if comparedInt is within range of selectedInt
+bool IRAM_ATTR withinRange(int64_t selectedInt, int64_t comparedInt){
+  int64_t range = selectedInt * WITHIN_RANGE;
+  int64_t selectedPlusRange = selectedInt + range;
+  int64_t selectedMinusRange = selectedInt - range;
+
+  if(comparedInt >= selectedMinusRange && comparedInt <= selectedPlusRange) return true;
+  else                                                                      return false;
+}
+
+uint8_t IRAM_ATTR nextSyncClkState(int64_t TimeSinceLastTransition, bool currentVoltage, uint8_t BitNumber){
+  bool expectedVoltage;
+  if(BitNumber == 2 || BitNumber == 4 || BitNumber == 6 || BitNumber == 8)  expectedVoltage = false;
+  else                                                                      expectedVoltage = true;
+
+  if(currentVoltage == expectedVoltage && withinRange(bufferAverage(BitNumber), TimeSinceLastTransition)){
+    Serial.printf("a%d\n", BitNumber-1);
+    noSyncPeriodAvgBuf[BitNumber-1] = TimeSinceLastTransition;
+    return BitNumber+1;
+  }
+  else return rxErrorHandling(currentVoltage);
+}
+
+enum IRAM_ATTR lastSymbol getLastSymbol(int64_t TimeSinceLastTransition, bool currentVoltage, bool expectedVoltage){
+  int64_t period = halfPeriod * 2;
+
+  //Detect missed transition and error out
+  if(currentVoltage != expectedVoltage) return Error;
+
+  //Detect last symbol (half-period or period)
+  if(withinRange(halfPeriod, TimeSinceLastTransition))  return HalfPeriod;
+  else if(withinRange(period, TimeSinceLastTransition)) return Period;
+  else                                                  return Error;
+}
+
+bool IRAM_ATTR addBitAndCheckEndOfFrame(bool bitValue){
+  //Calculate bit position
+  uint16_t bytePos = (currentBitPos - 1) / 8;
+  uint8_t bitByteOffset = (currentBitPos - 1) % 8;
+
+  //Add bit to Frame buffer
+  if(bitValue)  rxFrame[bytePos] |= 1 << bitByteOffset;
+  else          rxFrame[bytePos] &= ~(1 << bitByteOffset);
+
+  //Update bit position
+  currentBitPos++;
+
+  //Recalculate bit position
+  bytePos = (currentBitPos - 1) / 8;
+  bitByteOffset = (currentBitPos - 1) % 8;
+
+  //Detect bad frame (too long)
+  if(currentBitPos > 262*8) return true;
+
+  //Check if end of valid frame
+  if(currentBitPos == 0 && rxFrame[bytePos-1] == 0b01111110 && bytePos > 3){
+    if(bytePos == rxFrame[3] + 7){
+      rxFrameReadyFlag = true;
+      return true;
+    }
+  }
+  return false;
+}
+
+void IRAM_ATTR rxPinChanged() {
   //Calculate Time since last transition
   int64_t CurrentTime = esp_timer_get_time();
   int64_t TimeSinceLastTransitionInUS = CurrentTime - lastRXTransitionTime;
   lastRXTransitionTime = CurrentTime;
 
-  //Get current pin voltage state
-  bool pinVoltageState = digitalRead(RX_PIN);
+  pinVoltageState = !pinVoltageState;
   enum lastSymbol currentLastSymbol;
 
   //Sync clock on preambule
@@ -204,81 +271,33 @@ void rxPinChanged() {
       else                                  syncClkState = rxErrorHandling(pinVoltageState);
       break;
   }
+  hasReceived = true;
 }
 
-uint8_t nextSyncClkState(int64_t TimeSinceLastTransition, bool currentVoltage, uint8_t BitNumber){
-  bool expectedVoltage;
-  if(BitNumber == 2 || BitNumber == 4 || BitNumber == 6 || BitNumber == 8)  expectedVoltage = false;
-  else                                                                      expectedVoltage = true;
+void setup() {
+  Serial.begin(115200);
+  pinMode(RX_PIN, INPUT);
 
-  if(currentVoltage == expectedVoltage && withinRange(bufferAverage(BitNumber), TimeSinceLastTransition)){
-    noSyncPeriodAvgBuf[BitNumber-1] = TimeSinceLastTransition;
-    return BitNumber+1;
+  attachInterrupt(RX_PIN, rxPinChanged, CHANGE);
+  pinVoltageState = digitalRead(RX_PIN);
+  /*
+  //Setup GPIO pin
+  gpio_config_t io_conf = {};
+  io_conf.intr_type = GPIO_INTR_ANYEDGE;
+  io_conf.pin_bit_mask = RX_PIN;
+  io_conf.mode = GPIO_MODE_INPUT;
+  io_conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
+  io_conf.pull_up_en = GPIO_PULLUP_DISABLE;
+  gpio_config(&io_conf);
+
+  gpio_install_isr_service(ESP_INTR_FLAG_IRAM);
+  gpio_isr_handler_add(RX_PIN, (void (*)(void*))rxPinChanged, NULL);
+  */
+}
+
+void loop() {
+  if(hasReceived){
+    Serial.printf("%d\n", syncClkState);
+    hasReceived = false;
   }
-  else return rxErrorHandling(currentVoltage);
-}
-
-uint8_t rxErrorHandling(bool currentVoltage){
-  if(currentVoltage)  return NoSync;
-  else                return Bit1;
-}
-
-//Check if comparedInt is within range of selectedInt
-bool withinRange(int64_t selectedInt, int64_t comparedInt){
-  int64_t range = selectedInt * WITHIN_RANGE;
-  int64_t selectedPlusRange = selectedInt + range;
-  int64_t selectedMinusRange = selectedInt - range;
-
-  if(comparedInt >= selectedMinusRange && comparedInt <= selectedPlusRange) return true;
-  else                                                                      return false;
-}
-
-//Calculate average from buffer from 0 to BitNumber elements
-int64_t bufferAverage(uint8_t BitNumber){
-  int64_t average = 0;
-  for(uint8_t i=0; i < BitNumber; i++){
-    average += noSyncPeriodAvgBuf[i];
-  }
-  return average / BitNumber;
-}
-
-enum lastSymbol getLastSymbol(int64_t TimeSinceLastTransition, bool currentVoltage, bool expectedVoltage){
-  int64_t period = halfPeriod * 2;
-
-  //Detect missed transition and error out
-  if(currentVoltage != expectedVoltage) return Error;
-
-  //Detect last symbol (half-period or period)
-  if(withinRange(halfPeriod, TimeSinceLastTransition))  return HalfPeriod;
-  else if(withinRange(period, TimeSinceLastTransition)) return Period;
-  else                                                  return Error;
-}
-
-bool addBitAndCheckEndOfFrame(bool bitValue){
-  //Calculate bit position
-  uint16_t bytePos = (currentBitPos - 1) / 8;
-  uint8_t bitByteOffset = (currentBitPos - 1) % 8;
-
-  //Add bit to Frame buffer
-  if(bitValue)  rxFrame[bytePos] |= 1 << bitByteOffset;
-  else          rxFrame[bytePos] &= ~(1 << bitByteOffset);
-
-  //Update bit position
-  currentBitPos++;
-
-  //Recalculate bit position
-  bytePos = (currentBitPos - 1) / 8;
-  bitByteOffset = (currentBitPos - 1) % 8;
-
-  //Detect bad frame (too long)
-  if(currentBitPos > 262*8) return true;
-
-  //Check if end of valid frame
-  if(currentBitPos == 0 && rxFrame[bytePos-1] == 0b01111110 && bytePos > 3){
-    if(bytePos == rxFrame[3] + 7){
-      rxFrameReadyFlag = true;
-      return true;
-    }
-  }
-  return false;
 }
