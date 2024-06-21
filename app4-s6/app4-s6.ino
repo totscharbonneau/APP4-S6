@@ -237,55 +237,41 @@ void receive(void *pvParameters) {
     Serial.println("taskreceive");
     int periodElapse;
     int rxVal;
+    int FrameLenght = 7; // pre data
+    uint8_t dataLenght = 0;
     buffer.push_back(0);
     for (;;) {
         auto currentTime = micros();
         periodElapse = currentTime - lastChangeTime;
-
         if (!checkPeriod && (periodElapse >= HALF_PERIOD * 2 + TIME_BETWEEN_BITS - THRESHOLD_PERIOD) &&
             (periodElapse <= HALF_PERIOD * 2 + TIME_BETWEEN_BITS + THRESHOLD_PERIOD)) {
             checkPeriod = true;
         }
-
         if (receivedBit) {
             // Serial.println(buffer.size());
-
             receivedBit = false;
             rxVal = digitalRead(RX_PIN);
-
-            if (buffer.size() != 0) {
-                if (checkPeriod) {
-                    if (periodElapse >= HALF_PERIOD - THRESHOLD_PERIOD) {
-                        buffer.push_back(!rxVal); // Add inverted rxVal to buffer
-                    }
-                } else {
-                    checkPeriod = true;
-                }
-            } else { // First bit
-                buffer.push_back(0); // Add first bit to buffer
+            if (checkPeriod) {
+              if (periodElapse >= HALF_PERIOD - THRESHOLD_PERIOD) {
+                buffer.push_back(!rxVal); // Add inverted rxVal to buffer
+              }
+            } else {
+              checkPeriod = true;
             }
             lastChangeTime = currentTime;
         }
         // Check if a complete byte (8 bits) has been accumulated
-        if (buffer.size() >= 11*8) {
+        if (buffer.size() == 33){
+          for(int index = 23; index <32; index++){
+            dataLenght |= (buffer[index] << 7 - index + 24);
+          }
+          FrameLenght += dataLenght;
+        }
+
+        if (buffer.size() >= FrameLenght*8) {
             processBuffer();
             buffer.clear();
         }
-            // uint8_t currentByte = 0;
-            // for (int i = 0; i < 8; ++i) {
-            //     currentByte |= buffer[i] << (7 - i);
-            // }
-            // receivedBytes.push_back(currentByte);
-            // printVector(receivedBytes);
-            // buffer.clear(); // Clear buffer after forming a byte
-        
-
-        // if (receivedBytes.size() == 11){
-        //   rxFrame = receivedBytes.data();
-        //   readFrame();
-        //   receivedBytes.clear();
-        // }
-
         vTaskDelay(1); // Delay before checking again
     }
 }
