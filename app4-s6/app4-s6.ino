@@ -1,8 +1,20 @@
+// Include necessary libraries for timer and vector operations
 #include "esp_timer.h"
 #include <vector>
 #include "CRC16.h"
 
-//GLOBAL CONSTANTS
+// Define constants for different case use scenarios
+#define NORMAL 0
+#define TOOLONG 1
+#define WRONGCRC 2
+#define MAXSIZE 3
+#define NOSTART 4
+#define NOEND 5
+
+const int SITUATION = MAXSIZE;
+
+// Global constants for pin configuration and timing
+unsigned long start_time;
 const int RX_PIN = 13;
 const int TX_PIN = 33;
 const float WITHIN_RANGE = 0.1;
@@ -11,19 +23,18 @@ bool checkPeriod = false;
 unsigned long lastChangeTime = 0;
 unsigned long sendTaskTime = 0;
 
-const int HALF_PERIOD = 500;            // en micro
-const int THRESHOLD_PERIOD = 280;       // en micro
-const int TIME_BETWEEN_BITS = 5000;     // en micro
-const TickType_t xDelay = TIME_BETWEEN_BITS / 1000 * portTICK_PERIOD_MS; // en millis
+const int HALF_PERIOD = 500;            // Half period in microseconds
+const int THRESHOLD_PERIOD = 280;       // Threshold period in microseconds
+const int TIME_BETWEEN_BITS = 5000;     // Time between bits in microseconds
+const TickType_t xDelay = TIME_BETWEEN_BITS / 1000 * portTICK_PERIOD_MS; // Time delay in milliseconds
 
-//GLOBAL VARIABLES
-uint8_t* rxFrame;
+// Global variables for frame reception and buffer handling
 bool rxFrameReadyFlag = false;
 
 std::vector<uint8_t> receivedBytes;    // Vector to store received bytes
 std::vector<int> buffer;               // Buffer to accumulate received bits
 
-//TOTS VARIABLES
+// Define states for the state machine
 enum class State {
   IDLE,
   PREAMBLE,
@@ -32,14 +43,14 @@ enum class State {
   HEADER_LENGTH,
   DATA,
   CONTROL,
-  END
+  END,
+  ERROR
 };
 
-State currentState = State::IDLE;
+State currentState = State::PREAMBLE;
 State nextState; 
 
-
-//rxPinChanged() ISR VARIABLES
+// Variables for ISR and synchronization
 int64_t lastRXTransitionTime = 0;
 enum syncClk {NoSync = 0, Bit1 = 1, Bit2 = 2, Bit3 = 3, Bit4 = 4, Bit5 = 5, Bit6 = 6, Bit7 = 7, Bit8 = 8, Bit9 = 9, LowVoltageInSync = 10, HighVoltageInSync = 11, LowVoltageHalf = 12, HighVoltageHalf = 13};
 uint8_t syncClkState = NoSync;
@@ -48,53 +59,67 @@ int64_t halfPeriod;
 enum lastSymbol {HalfPeriod, Period, Error};
 uint16_t currentBitPos;
 
+// Function declarations
 void receivePulse();
 void readFrame();
 std::vector<uint8_t> createFrame();
-const int lenghtFrame = 17;
-//uint8_t rxFrame[lenghtFrame] = {85,126,0,5,1,1,1,1,0,0,0,0,0,0,0,0,0}; 
+int lenghtFrame;
+uint8_t * rxFrame; 
 
+// Function to read the frame
 void readFrame() {
-    Serial.println("readFrame");
+    // Uncomment for debugging: printUint8Array(rxFrame, 11);
     uint8_t lenghtData;
     CRC16 crc;
     std::vector<uint8_t> data;
     uint16_t crcVal;
+    unsigned long finalTime;
     for (int i = 0; i < lenghtFrame; i++) {
-
+        // Uncomment for debugging: Serial.println(rxFrame[i]);
         switch (currentState) {
             case State::IDLE:
-                // Serial.println("State: IDLE");
-                i = 2;
-                nextState = State::HEADER_LENGTH;
+                // Uncomment for debugging: Serial.println("State: IDLE");
+                nextState = State::PREAMBLE;
                 break;
 
             case State::PREAMBLE:
-                // Serial.println("State: PREAMBLE");
+                // Uncomment for debugging: Serial.println("State: PREAMBLE");
                 // Add relevant logic for PREAMBLE
                 nextState = State::START; // Example transition
                 break;
 
             case State::START:
-                // Serial.println("State: START");
-                // Add relevant logic for START
-                nextState = State::HEADER_TYPE; // Example transition
-                break;
+                // Uncomment for debugging: Serial.println("State: Start");
+                // Uncomment for debugging: Serial.println(rxFrame[i]);
+                if (rxFrame[i] != 126){
+                  Serial.println("ERROR NO START");
+                  nextState = State::ERROR;
+                  break;
+                } else {
+                  nextState = State::HEADER_TYPE; // Example transition
+                  break;
+                }
 
             case State::HEADER_TYPE:
-                // Serial.println("State: HEADER_TYPE");
+                // Uncomment for debugging: Serial.println("State: HEADER_TYPE");
                 // Add relevant logic for HEADER_TYPE
                 nextState = State::HEADER_LENGTH; // Example transition
                 break;
 
             case State::HEADER_LENGTH:
-                // Serial.println("State: HEADER_LENGTH");
+                // Uncomment for debugging: Serial.println("State: HEADER_LENGTH");
                 lenghtData = rxFrame[i];
-                nextState = State::DATA;
-                break;
+                if (lenghtData > 80){
+                  Serial.println("ERROR : PAYLOAD TOO LONG");
+                  nextState = State::ERROR;
+                  break;
+                } else {
+                  nextState = State::DATA;
+                  break;
+                }
 
             case State::DATA:
-                // Serial.println("State: DATA");
+                // Uncomment for debugging: Serial.println("State: DATA");
                 if (i < 4 + lenghtData - 1) {
                     data.push_back(rxFrame[i]);
                     nextState = State::DATA;
@@ -105,23 +130,25 @@ void readFrame() {
                 break;
 
             case State::CONTROL:
-                if (i == 4 + lenghtData - 1){
+                // Uncomment for debugging: Serial.println(rxFrame[i]);
+                // Uncomment for debugging: Serial.println(i);
+                if (i == 4 + lenghtData){
                   crcVal = rxFrame[i] << 8;
                   nextState = State::CONTROL;
                   break;
-                }
-                else if(i == 4 + lenghtData){
+                } else if (i == 4 + lenghtData + 1){
                   crcVal |= rxFrame[i] & 0b11111111;
 
                   for(int j = 0; j < lenghtData; j++){
-                  crc.add(data[j]);
+                    crc.add(data[j]);
                   }
-                  if(crc.calc() == crcVal){
-                    currentState = State::END;
-                  }
-                  else {
-                    Serial.println("CRC ERROR");
+                  if (crc.calc() == crcVal){
+                    // Uncomment for debugging: Serial.println("CRC GOOD");
                     nextState = State::END;
+                    break;
+                  } else {
+                    Serial.println("CRC ERROR OR PAYLOAD LONGER THAN EXPECTED");
+                    nextState = State::ERROR;
                     break;
                   }
                 }
@@ -129,17 +156,35 @@ void readFrame() {
                 break;
 
             case State::END:
-                // Serial.println("State: END");
-                Serial.println(i);
+                // Uncomment for debugging: Serial.println(i);
+                // Uncomment for debugging: Serial.println(lenghtData);
+                finalTime = micros() - start_time;
+                if (i == lenghtData + 6){
+                  if(rxFrame[i] != 126){
+                    Serial.println("ERROR NO END");
+                  } else {
+                    Serial.println("CORRECT END");
+                    Serial.printf(" - time %d - ", finalTime);
+                  }
+                }
+                // Uncomment for debugging: Serial.println("State: END");
+                // Uncomment for debugging: Serial.println(i);
                 i = lenghtFrame; // Ending the loop
                 nextState = State::IDLE;
                 break;
+
+            case State::ERROR:
+              nextState = State::ERROR;
+              break;
         }
         currentState = nextState;
     }
-    printVector(data);
+    if (currentState != State::ERROR){
+      printVector(data);
+    }
 }
 
+// Function to print a vector of uint8_t
 void printVector(std::vector< uint8_t > data) {
   Serial.printf("<");
   for(int i = 0; i < data.size(); i++) {
@@ -148,74 +193,134 @@ void printVector(std::vector< uint8_t > data) {
   Serial.println(">");
 }
 
+// Function to create a frame from payload
 std::vector<uint8_t> createFrame(uint8_t *payload, uint8_t size){
-  // uint8_t payload[8] = {1,1,1,1,1,1,1,1};
   CRC16 crc;
   crc.add(payload, size);
   uint16_t crcVal = crc.calc();
-
+  
   std::vector<uint8_t> frame{};
-  frame.push_back(0b01010101); //preable
-  frame.push_back(0b01111110); //start
-  frame.push_back(0b00000000); //type/flag
-  frame.push_back(size); //size
+  frame.push_back(0b01010101); // Preamble
+  frame.push_back(0b01111110); // Start
+  frame.push_back(0b00000000); // Type/flag
+  frame.push_back(size); // Size
   for(int i = 0; i < size; i++){
     frame.push_back(payload[i]);
   }
   frame.push_back((crcVal >> 8) & 0b11111111);  // CRC
   frame.push_back(crcVal & 0b11111111);         // CRC
-  frame.push_back(0b01111110);
+  frame.push_back(0b01111110); // End
   return frame;
 }
 
+// Setup function to initialize serial communication and pin modes
 void setup() {
   Serial.begin(115200);
   Serial.println(__FILE__);
   pinMode(RX_PIN, INPUT);
   pinMode(TX_PIN, OUTPUT);
-  
 
-  // attachInterrupt(digitalPinToInterrupt(RX_PIN), rxPinChanged, CHANGE);
-
+  // Attach interrupts for pin change detection
   attachInterrupt(digitalPinToInterrupt(RX_PIN), receivePulse, CHANGE);
   
+  // Create tasks for sending and receiving frames
   xTaskCreate(send, "Send Trame", 2048, NULL, 2,  NULL);
-
   xTaskCreate(receive, "receive Trame", 2048, NULL, 3,  NULL);
 }
 
 void loop() {
+  // Empty loop as tasks handle communication
 }
 
+// ISR for receiving pulses
 void IRAM_ATTR receivePulse() {
-  // Serial.println("interupt");
   receivedBit = true;
 }
 
+// Convert a vector to a uint8_t array
+uint8_t * vector2Array(std::vector<uint8_t> vector){
+  uint8_t * temp = vector.data();
+  return temp;
+}
+
+// Task to send frames
 void send(void *pvParameters){
+  uint8_t size;
   Serial.println("send");
-  const uint8_t size = 4;
-  uint8_t payloadArray[size] = {
-    0b11011101, // 221
-    0b11011111, // 223
-    0b00011101, // 29
-    0b00000111, // 7
-  };
-  
-  std::vector<uint8_t> message1 = createFrame(payloadArray, size);   // success
-  // Serial.println("message : ");
-  // printVector(message1);
+  std::vector<uint8_t> message1;
+
+  // Switch case for different scenarios
+  switch (SITUATION){
+    case NORMAL:
+    {
+      size = 4;
+      uint8_t payloadArray[size] = { 42, 56 , 73, 1};
+      message1 = createFrame(payloadArray, size);
+      break;
+    }
+    case TOOLONG:
+    {
+      size = 82;
+      uint8_t payloadArray[size];
+      for(int i = 0; i < size; i++){
+        payloadArray[i] = 44;
+      }
+      message1 = createFrame(payloadArray, size);
+      break;
+    }
+    case WRONGCRC:
+      {
+      size = 4;
+      uint8_t payloadArray[size] = { 42, 56 , 73, 1};
+      message1 = createFrame(payloadArray, size);
+      message1[8] += 3;
+      message1[9] += 1;
+      break;
+      }
+    case MAXSIZE:
+    {
+      size = 80;
+      uint8_t payloadArray[size];
+      for(int i = 0; i < size; i++){
+        payloadArray[i] = 24;
+      }
+      message1 = createFrame(payloadArray, size);
+      break;
+    }
+    case NOSTART:
+    {
+      size = 4;
+      uint8_t payloadArray[size] = { 42, 56 , 73, 1};
+      message1 = createFrame(payloadArray, size);
+      message1[1] = 0b00000000; 
+      break;
+    }
+    case NOEND:
+    {
+      size = 4;
+      uint8_t payloadArray[size] = { 42, 56 , 73, 1};
+      message1 = createFrame(payloadArray, size);
+      message1[10] = 0b00000000; 
+      break;
+    }
+    default:
+    {
+      Serial.println("ERROR CHOSE CASE");
+      break;
+    }
+  }
+
   sendTaskTime = micros();
   for(int i = 0; i < message1.size(); ++i) {
     sendByte(message1[i]);
   }
 
   for (;;) {
-    // Serial.println("loop");
     vTaskDelay(xDelay);
   }
 }
 
+// Function to send a byte
 void sendByte(uint8_t bits) {
   int val;
   for(int i = 7; i >= 0; i--) {
@@ -225,21 +330,24 @@ void sendByte(uint8_t bits) {
   }
 }
 
-void sendPulse(int value) { // 0, 1
+// Function to send a pulse
+void sendPulse(int value) {
   digitalWrite(TX_PIN, value);
   delayMicroseconds(HALF_PERIOD);
-
   digitalWrite(TX_PIN, !value);
   delayMicroseconds(HALF_PERIOD);
 }
 
+// Task to receive frames
 void receive(void *pvParameters) {
     Serial.println("taskreceive");
     int periodElapse;
     int rxVal;
-    int FrameLenght = 7; // pre data
+    int FrameLenght; 
     uint8_t dataLenght = 0;
+    bool finished = false;
     buffer.push_back(0);
+    bool first = true;
     for (;;) {
         auto currentTime = micros();
         periodElapse = currentTime - lastChangeTime;
@@ -248,7 +356,10 @@ void receive(void *pvParameters) {
             checkPeriod = true;
         }
         if (receivedBit) {
-            // Serial.println(buffer.size());
+            if (first){
+              first = false;
+              start_time = micros();
+            }
             receivedBit = false;
             rxVal = digitalRead(RX_PIN);
             if (checkPeriod) {
@@ -262,187 +373,42 @@ void receive(void *pvParameters) {
         }
         // Check if a complete byte (8 bits) has been accumulated
         if (buffer.size() == 33){
-          for(int index = 23; index <32; index++){
+          for(int index = 23; index < 32; index++){
             dataLenght |= (buffer[index] << 7 - index + 24);
           }
-          FrameLenght += dataLenght;
+          FrameLenght = 7 + dataLenght;
         }
 
-        if (buffer.size() >= FrameLenght*8) {
+        if (buffer.size() == FrameLenght * 8 && !finished) {
+            finished = true;
             processBuffer();
             buffer.clear();
+            lenghtFrame = FrameLenght;
+            readFrame();
         }
         vTaskDelay(1); // Delay before checking again
     }
 }
 
+// Function to process the buffer and convert bits to bytes
 void processBuffer() {
-    // Assuming each byte is 8 bits
-    // Convert bits in buffer to bytes
     for (size_t i = 0; i < buffer.size(); i += 8) {
         uint8_t byte = 0;
         for (int j = 0; j < 8; ++j) {
             byte |= buffer[i + j] << (7 - j);
-           
         }
       receivedBytes.push_back(byte);
     }
-  printVector(receivedBytes);
+    rxFrame = receivedBytes.data();
 }
 
-
-void rxPinChanged() {
-  //Calculate Time since last transition
-  int64_t CurrentTime = esp_timer_get_time();
-  int64_t TimeSinceLastTransitionInUS = CurrentTime - lastRXTransitionTime;
-  lastRXTransitionTime = CurrentTime;
-
-  //Get current pin voltage state
-  bool pinVoltageState = digitalRead(RX_PIN);
-  enum lastSymbol currentLastSymbol;
-
-  //Sync clock on preambule
-  switch (syncClkState)
-  {
-    case NoSync:
-      syncClkState = rxErrorHandling(pinVoltageState);
-      break;
-    case Bit1:
-      if(pinVoltageState){
-        noSyncPeriodAvgBuf[0] = TimeSinceLastTransitionInUS;
-        syncClkState = Bit2;
-      }
-      else syncClkState = rxErrorHandling(pinVoltageState);
-      break;
-    case Bit2:
-      syncClkState = nextSyncClkState(TimeSinceLastTransitionInUS, pinVoltageState, Bit2);
-      break;
-    case Bit3:
-      syncClkState = nextSyncClkState(TimeSinceLastTransitionInUS, pinVoltageState, Bit3);
-      break;
-    case Bit4:
-      syncClkState = nextSyncClkState(TimeSinceLastTransitionInUS, pinVoltageState, Bit4);
-      break;
-    case Bit5:
-      syncClkState = nextSyncClkState(TimeSinceLastTransitionInUS, pinVoltageState, Bit5);
-      break;
-    case Bit6:
-      syncClkState = nextSyncClkState(TimeSinceLastTransitionInUS, pinVoltageState, Bit6);
-      break;
-    case Bit7:
-      syncClkState = nextSyncClkState(TimeSinceLastTransitionInUS, pinVoltageState, Bit7);
-      break;
-    case Bit8:
-      syncClkState = nextSyncClkState(TimeSinceLastTransitionInUS, pinVoltageState, Bit8);
-      break;
-    case Bit9:
-      halfPeriod = bufferAverage(Bit9) / 2;
-      rxFrame[0] = 0b01010101;
-      currentBitPos = 9;
-
-      currentLastSymbol = getLastSymbol(TimeSinceLastTransitionInUS, pinVoltageState, true);
-      if(currentLastSymbol == HalfPeriod)   syncClkState = HighVoltageHalf;
-      else if(currentLastSymbol == Period)  syncClkState = addBitAndCheckEndOfFrame(false) ? rxErrorHandling(pinVoltageState) : HighVoltageInSync;
-      else                                  syncClkState = rxErrorHandling(pinVoltageState);
-      break;
-    case LowVoltageInSync:
-      currentLastSymbol = getLastSymbol(TimeSinceLastTransitionInUS, pinVoltageState, true);
-      if(currentLastSymbol == HalfPeriod)   syncClkState = HighVoltageHalf;
-      else if(currentLastSymbol == Period)  syncClkState = addBitAndCheckEndOfFrame(false) ? rxErrorHandling(pinVoltageState) : HighVoltageInSync;
-      else                                  syncClkState = rxErrorHandling(pinVoltageState);
-      break;
-    case HighVoltageInSync:
-      currentLastSymbol = getLastSymbol(TimeSinceLastTransitionInUS, pinVoltageState, false);
-      if(currentLastSymbol == HalfPeriod)   syncClkState = LowVoltageHalf;
-      else if(currentLastSymbol == Period)  syncClkState = addBitAndCheckEndOfFrame(true) ? rxErrorHandling(pinVoltageState) : LowVoltageInSync;
-      else                                  syncClkState = rxErrorHandling(pinVoltageState);
-      break;
-    case LowVoltageHalf:
-      currentLastSymbol = getLastSymbol(TimeSinceLastTransitionInUS, pinVoltageState, true);
-      if(currentLastSymbol == HalfPeriod)   syncClkState = addBitAndCheckEndOfFrame(false) ? rxErrorHandling(pinVoltageState) : HighVoltageInSync;
-      else                                  syncClkState = rxErrorHandling(pinVoltageState);
-      break;
-    case HighVoltageHalf:
-      currentLastSymbol = getLastSymbol(TimeSinceLastTransitionInUS, pinVoltageState, false);
-      if(currentLastSymbol == HalfPeriod)   syncClkState = addBitAndCheckEndOfFrame(true) ? rxErrorHandling(pinVoltageState) : LowVoltageInSync;
-      else                                  syncClkState = rxErrorHandling(pinVoltageState);
-      break;
-  }
-}
-
-uint8_t nextSyncClkState(int64_t TimeSinceLastTransition, bool currentVoltage, uint8_t BitNumber){
-  bool expectedVoltage;
-  if(BitNumber == 2 || BitNumber == 4 || BitNumber == 6 || BitNumber == 8)  expectedVoltage = false;
-  else                                                                      expectedVoltage = true;
-
-  if(currentVoltage == expectedVoltage && withinRange(bufferAverage(BitNumber), TimeSinceLastTransition)){
-    noSyncPeriodAvgBuf[BitNumber-1] = TimeSinceLastTransition;
-    return BitNumber+1;
-  }
-  else return rxErrorHandling(currentVoltage);
-}
-
-uint8_t rxErrorHandling(bool currentVoltage){
-  if(currentVoltage)  return NoSync;
-  else                return Bit1;
-}
-
-//Check if comparedInt is within range of selectedInt
-bool withinRange(int64_t selectedInt, int64_t comparedInt){
-  int64_t range = selectedInt * WITHIN_RANGE;
-  int64_t selectedPlusRange = selectedInt + range;
-  int64_t selectedMinusRange = selectedInt - range;
-
-  if(comparedInt >= selectedMinusRange && comparedInt <= selectedPlusRange) return true;
-  else                                                                      return false;
-}
-
-//Calculate average from buffer from 0 to BitNumber elements
-int64_t bufferAverage(uint8_t BitNumber){
-  int64_t average = 0;
-  for(uint8_t i=0; i < BitNumber; i++){
-    average += noSyncPeriodAvgBuf[i];
-  }
-  return average / BitNumber;
-}
-
-enum lastSymbol getLastSymbol(int64_t TimeSinceLastTransition, bool currentVoltage, bool expectedVoltage){
-  int64_t period = halfPeriod * 2;
-
-  //Detect missed transition and error out
-  if(currentVoltage != expectedVoltage) return Error;
-
-  //Detect last symbol (half-period or period)
-  if(withinRange(halfPeriod, TimeSinceLastTransition))  return HalfPeriod;
-  else if(withinRange(period, TimeSinceLastTransition)) return Period;
-  else                                                  return Error;
-}
-
-bool addBitAndCheckEndOfFrame(bool bitValue){
-  //Calculate bit position
-  uint16_t bytePos = (currentBitPos - 1) / 8;
-  uint8_t bitByteOffset = (currentBitPos - 1) % 8;
-
-  //Add bit to Frame buffer
-  if(bitValue)  rxFrame[bytePos] |= 1 << bitByteOffset;
-  else          rxFrame[bytePos] &= ~(1 << bitByteOffset);
-
-  //Update bit position
-  currentBitPos++;
-
-  //Recalculate bit position
-  bytePos = (currentBitPos - 1) / 8;
-  bitByteOffset = (currentBitPos - 1) % 8;
-
-  //Detect bad frame (too long)
-  if(currentBitPos > 262*8) return true;
-
-  //Check if end of valid frame
-  if(currentBitPos == 0 && rxFrame[bytePos-1] == 0b01111110 && bytePos > 3){
-    if(bytePos == rxFrame[3] + 7){
-      rxFrameReadyFlag = true;
-      return true;
+// Function to print an array of uint8_t
+void printUint8Array(const uint8_t* array, size_t length) {
+  for (size_t i = 0; i < length; i++) {
+    Serial.print(array[i]);
+    if (i < length - 1) {
+      Serial.print(", ");  // Print a comma and space between values
     }
   }
-  return false;
+  Serial.println();  // Move to the next line after printing all values
 }
